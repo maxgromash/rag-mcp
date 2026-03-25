@@ -8,6 +8,69 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from sentence_transformers import CrossEncoder
 
+class ConversationalMCPAgent:
+    def __init__(self, index_path="faiss_structural_index"):
+        if not os.path.exists(index_path):
+            raise FileNotFoundError(f"Index not found: {index_path}")
+
+        self.embeddings = OllamaEmbeddings(model="nomic-embed-text")
+        self.llm = ChatOllama(model="llama3.2", temperature=0)
+        self.vector_db = FAISS.load_local(index_path, self.embeddings, allow_dangerous_deserialization=True)
+        self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+
+        self.chat_history = []
+        self.task_state = {"goal": "Not defined", "constraints": [], "fixed_terms": {}}
+
+    def update_task_state(self, user_input):
+        """Обновление памяти задачи с защитой от ошибок формата"""
+        prompt = f"""
+        Update the MCP Project State JSON based on the user message.
+        Current State: {json.dumps(self.task_state)}
+        User Message: {user_input}
+        
+        Rules:
+        - Return ONLY a valid JSON block.
+        - If 'stdio' is chosen, put it in fixed_terms.transport.
+        - If 'read-only' is set, add to constraints.
+        """
+        try:
+            res = self.llm.invoke(prompt).content
+            # Ищем JSON в блоке кода или просто в тексте
+            json_match = re.search(r'(\{.*\})', res, re.DOTALL)
+            if json_match:
+                new_state = json.loads(json_match.group(1))
+                self.task_state.update(new_state)
+        except:
+            pass
+
+    def ask_chat(self, query: str):
+        self.update_task_state(query)
+
+        # Поиск (RAG)
+        docs = self.vector_db.similarity_search(query, k=8)
+        scores = self.reranker.predict([[query, d.page_content] for d in docs])
+        relevant_docs = [d for s, d in sorted(zip(scores, docs), key=lambda x: x[0], reverse=True) if s > 0.1]
+
+        # Промпт для генерации
+        context = "\n\n".join([f"[Source: {d.metadata.get('source_file')}] {d.page_content}" for d in relevant_docs[:3]])
+        history = "\n".join([f"U: {u}\nA: {a[:100]}..." for u, a in self.chat_history[-2:]])
+
+        system_prompt = f"""
+        You are a Senior MCP Developer. Use @modelcontextprotocol/sdk. 
+        Project State: {json.dumps(self.task_state)}
+        History: {history}
+        Context: {context}
+        
+        STRICT RULES:
+        1. Answer in Russian.
+        2. If 'read-only' constraint exists, NEVER show code with DELETE/POST/UPDATE.
+        3. Use direct quotes from context if available.
+        4. Do not repeat the internal state JSON in your response.
+        """
+
+        answer = self.llm.invoke(f"{system_prompt}\n\nUser: {query}").content
+        self.chat_history.append((query, answer))
+        return answer
 class MCPAgent:
     def __init__(self, index_path="faiss_structural_index"):
         if not os.path.exists(index_path):
