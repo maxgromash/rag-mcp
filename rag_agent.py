@@ -14,7 +14,13 @@ class ConversationalMCPAgent:
             raise FileNotFoundError(f"Index not found: {index_path}")
 
         self.embeddings = OllamaEmbeddings(model="nomic-embed-text")
-        self.llm = ChatOllama(model="llama3.2", temperature=0)
+        self.llm = ChatOllama(
+            model="llama3.2",
+            temperature=0,
+            num_ctx=4096,        # Ограничиваем окно контекста, чтобы не перегружать RAM
+            repeat_penalty=1.2,  # Оптимизация против зацикливания (которое мы видели в логах)
+            num_predict=512      # Ограничиваем длину ответа для скорости
+        )
         self.vector_db = FAISS.load_local(index_path, self.embeddings, allow_dangerous_deserialization=True)
         self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
 
@@ -76,7 +82,13 @@ class MCPAgent:
         if not os.path.exists(index_path):
             raise FileNotFoundError(f"Индекс не найден: {index_path}")
         self.embeddings = OllamaEmbeddings(model="nomic-embed-text")
-        self.llm = ChatOllama(model="llama3.2", temperature=0)
+        self.llm = ChatOllama(
+            model="llama3.2",
+            temperature=0,
+            num_ctx=4096,        # Ограничиваем окно контекста, чтобы не перегружать RAM
+            repeat_penalty=1.2,  # Оптимизация против зацикливания (которое мы видели в логах)
+            num_predict=512      # Ограничиваем длину ответа для скорости
+        )
         self.vector_db = FAISS.load_local(index_path, self.embeddings, allow_dangerous_deserialization=True)
 
 class AdvancedMCPAgent(MCPAgent):
